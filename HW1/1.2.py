@@ -189,7 +189,7 @@ def plot_gradcam(image, heatmap, target_class):
 # 1. Pick a test image
 test_image, true_label_one_hot = next(iter(test_loader))
 true_class = torch.argmax(true_label_one_hot[0]).item()
-image = test_image[0]  # Shape: (1, 28, 28)
+image = test_image[0]# Shape: (1, 28, 28)
 
 # 2. Compute Grad-CAM for the predicted class
 heatmap, pred_class = grad_cam_multiclass(cnn_classifier.model, image)
