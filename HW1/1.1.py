@@ -4,7 +4,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 from seaborn import cubehelix_palette, heatmap
 import torch
-import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import Compose, ToTensor
 import deeplay as dl
@@ -38,17 +37,17 @@ class MNISTOneHotDataset(Dataset):
             image = self.transform(image)
             
         # Convert label to one-hot encoding
-        one_hot_label = F.one_hot(torch.tensor(label, dtype=torch.long), num_classes=self.num_classes).float()
+        one_hot_label = torch.nn.functional.one_hot(torch.tensor(label, dtype=torch.long), num_classes=self.num_classes).float()
         
         return image, one_hot_label
 
 transform = Compose([ToTensor()])
 
 # Prepare training data
-train_images = [plt.imread(os.path.join(train_path, file)) for file in train_image_files]
+train_images = [plt.imread(os.path.join(train_path, file)) for file in train_image_files] #List of numpy array
 train_digits = [int(os.path.basename(file)[0]) for file in train_image_files]
-train_dataset = MNISTOneHotDataset(train_images, train_digits, transform=transform)
-train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+train_dataset = MNISTOneHotDataset(train_images, train_digits, transform=transform) #Makes into dataset
+train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True) #Wraps into loader and shuffles data
 
 # Prepare test data
 test_images = [plt.imread(os.path.join(test_path, file)) for file in test_image_files]
