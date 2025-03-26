@@ -113,14 +113,14 @@ def grad_cam_multiclass(model, image, target_class=None, layer=None):
     hookdata = {}
     
     def fwd_hook(layer, input, output):
-        hookdata["activations"] = output.detach()
+        hookdata["activations"] = output.detach().clone() #Maybe remve clone
     
     def bwd_hook(layer, grad_input, grad_output):
-        hookdata["gradients"] = grad_output[0].detach()
+        hookdata["gradients"] = grad_output[0].detach().clone() #Maybe remove clone
     
     # Default to last convolutional layer if not specified
     if layer is None:
-        layer = model[0].blocks[-1].layer  # Assuming conv_base is model[0]
+        layer = model[0].blocks[-1].layer  #What does blocks do here?
     
     # Register hooks
     handle_fwd = layer.register_forward_hook(fwd_hook)
@@ -129,7 +129,10 @@ def grad_cam_multiclass(model, image, target_class=None, layer=None):
     # Forward pass
     image_tensor = image.unsqueeze(0)  # Add batch dim
     logits = model(image_tensor)
-    probs = torch.softmax(logits, dim=1)
+    probs = torch.softmax(logits, dim=1) #This might be strange
+    print(props)
+    logits.sum().backward()
+    print(logits)
     
     # Use predicted class if target_class is None
     if target_class is None:
