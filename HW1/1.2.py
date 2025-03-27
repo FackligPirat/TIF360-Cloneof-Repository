@@ -130,9 +130,7 @@ def grad_cam_multiclass(model, image, target_class=None, layer=None):
     image_tensor = image.unsqueeze(0)  # Add batch dim
     logits = model(image_tensor)
     probs = torch.softmax(logits, dim=1) #This might be strange
-    print(props)
-    logits.sum().backward()
-    print(logits)
+    print(probs)
     
     # Use predicted class if target_class is None
     if target_class is None:
