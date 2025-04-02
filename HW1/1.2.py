@@ -10,6 +10,7 @@ import deeplay as dl
 import torchmetrics as tm
 from skimage.transform import resize
 from skimage.exposure import rescale_intensity
+import random
 
 # Load MNIST data
 if not os.path.exists("MNIST_dataset"):
@@ -87,7 +88,6 @@ cnn_classifier = dl.Classifier(
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu') # If cuda available
 print(f"Using device: {device}")
 
-# Move your model to the GPU
 cnn_classifier = cnn_classifier.to(device)
 
 cnn_trainer = dl.Trainer(max_epochs=5, accelerator="auto", devices = "auto")
@@ -98,17 +98,7 @@ test_results = cnn_trainer.test(cnn_classifier, test_loader)
 
 #%% 1.2
 
-# --- Grad-CAM Function for Multi-Class ---
-def grad_cam_multiclass(model, image, target_class=None, layer=None):
-    """
-    Compute Grad-CAM heatmap for a multi-class model.
-    
-    Args:
-        model: Trained PyTorch model.
-        image: Input image (C, H, W).
-        target_class: Class index to explain (if None, uses predicted class).
-        layer: Target convolutional layer (default: last conv layer).
-    """
+def grad_cam_multiclass(model, image, layer=None):
     # Register hooks
     hookdata = {}
     
@@ -120,7 +110,7 @@ def grad_cam_multiclass(model, image, target_class=None, layer=None):
     
     # Default to last convolutional layer if not specified
     if layer is None:
-        layer = model[0].blocks[-1].layer  # Assuming conv_base is model[0]
+        layer = model[0].blocks[-1].layer
     
     # Register hooks
     handle_fwd = layer.register_forward_hook(fwd_hook)
@@ -131,13 +121,11 @@ def grad_cam_multiclass(model, image, target_class=None, layer=None):
     logits = model(image_tensor)
     probs = torch.softmax(logits, dim=1)
     
-    # Use predicted class if target_class is None
-    if target_class is None:
-        target_class = torch.argmax(probs).item()
+    predicted_class = torch.argmax(probs).item()
     
     # Zero gradients, then backward pass for target class
     model.zero_grad()
-    logits[0, target_class].backward(retain_graph=True)
+    logits[0, predicted_class].backward(retain_graph=True)
     
     # Remove hooks
     handle_fwd.remove()
@@ -150,16 +138,16 @@ def grad_cam_multiclass(model, image, target_class=None, layer=None):
     # Compute Grad-CAM
     pooled_gradients = gradients.mean(dim=[1, 2], keepdim=True)
     heatmap = (pooled_gradients * activations).sum(dim=0)
-    heatmap = torch.relu(heatmap).cpu().numpy()
+    heatmap = torch.relu(heatmap).detach().numpy()
     
     # Resize heatmap to match input image
     heatmap_resized = resize(heatmap, image.shape[1:], order=3)  # bicubic interpolation
     heatmap_rescaled = rescale_intensity(heatmap_resized, out_range=(0, 1))
     
-    return heatmap_rescaled, target_class
+    return heatmap_rescaled, predicted_class
 
 # --- Visualization Function ---
-def plot_gradcam(image, heatmap, target_class):
+def plot_gradcam(image, heatmap, target_class, true_class):
     """Plot original image, heatmap, and overlay."""
     plt.figure(figsize=(12, 4))
     
@@ -185,15 +173,34 @@ def plot_gradcam(image, heatmap, target_class):
     plt.tight_layout()
     plt.show()
 
-# --- Example Usage ---
-# 1. Pick a test image
-test_image, true_label_one_hot = next(iter(test_loader))
-true_class = torch.argmax(true_label_one_hot[0]).item()
-image = test_image[0]# Shape: (1, 28, 28)
+def get_test_images_by_class(test_loader, target_class):
+    """Extract all test images of a specific class."""
+    images = []
+    for batch_images, batch_labels in test_loader:
+        # Convert one-hot labels to class indices
+        class_indices = torch.argmax(batch_labels, dim=1)
+        # Filter images of the target class
+        mask = (class_indices == target_class)
+        images.extend(batch_images[mask])
+    return images
 
-# 2. Compute Grad-CAM for the predicted class
-heatmap, pred_class = grad_cam_multiclass(cnn_classifier.model, image)
+#%%
+wrong_counter = 0
+sample_range = 1
 
-# 3. Visualize
-plot_gradcam(image, heatmap, pred_class)
+for i in range(sample_range):
+    target_digit = 9
+    digit_images = get_test_images_by_class(test_loader, target_digit)
+
+    selected_image = random.choice(digit_images)
+
+    heatmap, pred_class = grad_cam_multiclass(cnn_classifier.model, selected_image)
+
+    plot_gradcam(selected_image, heatmap, pred_class, target_digit)
+
+    print(f"True class: {target_digit}, Predicted class: {pred_class}")
+    if target_digit != pred_class:
+        wrong_counter += 1
+
+#print(f'Worong conter: {wrong_counter}')
 # %%
