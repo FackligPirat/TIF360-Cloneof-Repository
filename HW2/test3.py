@@ -113,8 +113,8 @@ decoder.preprocess.configure(
 
 vae = dl.VariationalAutoEncoder(
     input_size=input_size,
-    latent_dim=2, channels=channels, decoder=decoder,
-    reconstruction_loss=torch.nn.L1Loss(reduction="sum"), beta=1,
+    latent_dim=2, channels=channels, #decoder=decoder,
+    reconstruction_loss=torch.nn.BCELoss(reduction="sum"), beta=1,
 ).create()
 
 print(vae)
@@ -151,7 +151,7 @@ for i in range(8):
     plt.show()
 #%% Recreate images
 img_num, img_size = 21, 28
-z0_grid = z1_grid = Normal(0, 1).icdf(torch.linspace(0.001, 0.999, img_num))
+z0_grid = z1_grid = z_range = torch.linspace(-2.5, 2.5, img_num)
 
 image = np.zeros((img_num * img_size, img_num * img_size))
 
