@@ -79,15 +79,17 @@ image_pip = (
     >> dt.pytorch.ToTensor(dtype=torch.float)
 )
 
+
 input_size = (28, 28)
-channels = [32, 64]
-latent_dim = 64
+channels = [64, 128]
+latent_dim = 2
 red_size = [int(dim / (2 ** len(channels))) for dim in input_size]
 
 encoder = dl.ConvolutionalEncoder2d(
     in_channels=3, 
     hidden_channels=channels,
     out_channels=channels[-1]
+    
 )
 encoder.postprocess.configure(torch.nn.Flatten)
 
@@ -95,7 +97,7 @@ decoder = dl.ConvolutionalDecoder2d(
     in_channels=channels[-1],
     hidden_channels=channels[::-1],
     out_channels=3,  # RGB output
-    out_activation=None
+    out_activation= torch.nn.Sigmoid
 )
 decoder.preprocess.configure(
     torch.nn.Unflatten,
@@ -109,7 +111,7 @@ vae = dl.VariationalAutoEncoder(
     channels=channels,
     encoder = encoder,
     decoder=decoder,
-    reconstruction_loss=torch.nn.L1Loss(reduction="sum"),
+    reconstruction_loss=torch.nn.BCELoss(reduction="sum"),
     beta=1,
 ).create()
 
