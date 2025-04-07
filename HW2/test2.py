@@ -1,239 +1,139 @@
-#%% Import libraries
+#%% Import and load/process data
+from medmnist import PathMNIST
 import os
 import deeptrack as dt
 import torch
-import torch.nn as nn
-import deeplay as dl
 import numpy as np
+import deeplay as dl
 import matplotlib.pyplot as plt
 from torch.distributions.normal import Normal
-#device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-#%%load and create data
-def plot_image(title, image):
-    """Plot a grayscale image with a title."""
-    plt.imshow(image, cmap="gray")
-    plt.title(title, fontsize=30)
-    plt.axis("off")
-    plt.show()
-    
-particle = dt.Sphere(
-    position=np.array([0.5, 0.5]) * 64, position_unit="pixel",
-    radius=500 * dt.units.nm, refractive_index=1.45 + 0.02j,
-)
-brightfield_microscope = dt.Brightfield(
-    wavelength=500 * dt.units.nm, NA=1.0, resolution=1 * dt.units.um,
-    magnification=10, refractive_index_medium=1.33, upsample=2,
-    output_region=(0, 0, 64, 64),
-)
-noise = dt.Poisson(snr=lambda: 5.0 + np.random.rand())
-
-diverse_particle = dt.Sphere(
-    position=lambda: np.array([32, 32]),
-    radius=lambda: 500 * dt.units.nm * (0.5 + 1.5*np.random.rand()),
-    position_unit="pixel",
-    refractive_index=1.45 + 0.02j,
-)
-diverse_illuminated_sample = brightfield_microscope(diverse_particle)
-diverse_clean_particle = (diverse_illuminated_sample >> dt.NormalizeMinMax()
-                          >> dt.MoveAxis(2, 0)
-                          >> dt.pytorch.ToTensor(dtype=torch.float))
-diverse_noisy_particle = (diverse_illuminated_sample >> noise >> dt.NormalizeMinMax()
-                          >> dt.MoveAxis(2, 0)
-                          >> dt.pytorch.ToTensor(dtype=torch.float))
-diverse_pip = diverse_noisy_particle & diverse_clean_particle
-
-#for i in range(5):
-    #input, target = diverse_pip.update().resolve()
-    #plot_image(f"Input Image {i}", input.permute(1, 2, 0))
-    #plot_image(f"Target Image {i}", target.permute(1, 2, 0))
-
+from PIL import Image
+from deeptrack.sources import Source, Join
+from matplotlib.patches import Rectangle
+import glob
 #%%
-class SimulatedDataset(torch.utils.data.Dataset):
-    """Simulated dataset simulating pairs of noisy and clean images."""
+#device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+#print(f"Using device: {device}")
 
-    def __init__(self, pip, buffer_size, replace=0):
-        """Initialize the dataset."""
-        self.pip, self.replace = pip, replace
-        self.images = [pip.update().resolve() for _ in range(buffer_size)]
+def rgb_to_grayscale(tensor):
+    r, g, b = tensor[:, :, 0], tensor[:, :, 1], tensor[:, :, 2]
+    return 0.2989 * r + 0.5870 * g + 0.1140 * b
 
-    def __len__(self):
-        """Return the size of the image buffer."""
-        return len(self.images)
+# Load datasets
+PathMNIST_train_dataset = PathMNIST(split="train", download=True)
+PathMNIST_test_dataset = PathMNIST(split="test", download=True)
 
-    def __getitem__(self, idx):
-        """Retrieve a noisy-clean image pair from the dataset."""
-        if np.random.rand() < self.replace:
-            self.images[idx] = self.pip.update().resolve()
-        image_pair = self.images[idx]
-        noisy_image, clean_image = image_pair[0], image_pair[1]
-        return noisy_image, clean_image
+# Convert to tensors and get labels
+train_imgs = torch.tensor(PathMNIST_train_dataset.imgs).float()
+test_imgs = torch.tensor(PathMNIST_test_dataset.imgs).float()
+train_labels = torch.tensor(PathMNIST_train_dataset.labels).squeeze()
+test_labels = torch.tensor(PathMNIST_test_dataset.labels).squeeze()
 
-diverse_dataset = SimulatedDataset(diverse_pip, buffer_size=256, replace=0.1)
-diverse_loader = torch.utils.data.DataLoader(diverse_dataset, batch_size=8,
-                                             shuffle=True)
-#%% New class based on VAE. This uses MLP as encoder, in the latent space projection and decoder.
-from typing import Optional, Sequence, Callable, List
-import torch
-import torch.nn as nn
-from deeplay import Application, Adam
+# Convert to grayscale
+train_gray = torch.stack([rgb_to_grayscale(img) for img in train_imgs])
+test_gray = torch.stack([rgb_to_grayscale(img) for img in test_imgs])
 
-class VariationalAutoEncoderMLP(Application):
-    def __init__(
-        self,
-        input_size: Sequence[int] = (64, 64),  # Now required (no Optional)
-        hidden_dim: int = 256,
-        encoder: Optional[nn.Module] = None,
-        decoder: Optional[nn.Module] = None,
-        reconstruction_loss: Optional[Callable] = None,  # Default handled below
-        latent_dim: int = 2,
-        beta: float = 1,
-        optimizer=None,
-        **kwargs,
-    ):
-        super().__init__(**kwargs)
-        
-        self.input_size = tuple(input_size)  # Ensure tuple
-        self.flattened_size = input_size[0] * input_size[1]
-        
-        # Default loss: BCELoss for MNIST, L1Loss otherwise
-        self.reconstruction_loss = reconstruction_loss or (
-            nn.BCELoss(reduction='sum') if input_size == (28, 28) 
-            else nn.L1Loss(reduction='sum')
-        )
-        
-        # Encoder (with automatic channel handling)
-        self.encoder = encoder or nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(self.flattened_size, hidden_dim),
-            nn.ReLU(),
-        )
-        
-        # Latent space
-        self.fc_mu = nn.Linear(hidden_dim, latent_dim)
-        self.fc_var = nn.Linear(hidden_dim, latent_dim)
-        self.fc_dec = nn.Linear(latent_dim, hidden_dim)
-        
-        # Decoder (with auto-shape and MNIST sigmoid)
-        self.decoder = decoder or nn.Sequential(
-            nn.Linear(hidden_dim, self.flattened_size),
-            nn.Sigmoid() if input_size == (28, 28) else nn.Identity(),  # MNIST special
-            nn.Unflatten(1, self.input_size)
-        )
-        
-        self.latent_dim = latent_dim
-        self.beta = beta
-        self.optimizer = optimizer or Adam(lr=1e-3)
-        
-        @self.optimizer.params
-        def params(self):
-            return self.parameters()
-
-    def encode(self, x):
-        # Handle both [B,C,H,W] and [B,H,W] inputs
-        if x.dim() == 3:
-            x = x.unsqueeze(1)  # Add channel dim if missing
-        return self.fc_mu(self.encoder(x)), self.fc_var(self.encoder(x))
-
-    def reparameterize(self, mu, log_var):
-        std = torch.exp(0.5 * log_var)
-        eps = torch.randn_like(std)
-        return eps * std + mu
-
-    def decode(self, z):
-        return self.decoder(self.fc_dec(z))
-
-    def forward(self, x):
-        mu, log_var = self.encode(x)
-        z = self.reparameterize(mu, log_var)
-        return self.decode(z), mu, log_var
+# Function to sort by label and save
+def save_sorted_images(images, labels, folder_path):
+    os.makedirs(folder_path, exist_ok=True)
     
-    def compute_loss(self, y_hat, y, mu, log_var):
-        # Auto-reshape targets if needed
-        if y.dim() == 3:
-            y = y.unsqueeze(1)
-        if y_hat.dim() == 3:
-            y_hat = y_hat.unsqueeze(1)
-            
-        rec_loss = self.reconstruction_loss(y_hat, y)
-        KLD = -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp())
-        return rec_loss, KLD
+    # Sort images by label
+    sorted_indices = torch.argsort(labels)
+    sorted_images = images[sorted_indices]
+    sorted_labels = labels[sorted_indices]
+    
+    # Save with new naming convention that reflects the sorting
+    if not os.listdir(folder_path):
+        for i, (img_tensor, label) in enumerate(zip(sorted_images, sorted_labels)):
+            img = Image.fromarray(img_tensor.numpy().astype('uint8'))
+            # Save with label prefix to maintain order
+            img.save(os.path.join(folder_path, f"{label.item()}_{i}.png"))
+    else:
+        print(f"Images already exist in {folder_path}, skipping saving")
 
-    def training_step(self, batch, batch_idx):
-        x, y = batch  # Removed train_preprocess for clarity
-        y_hat, mu, log_var = self(x)
-        rec_loss, KLD = self.compute_loss(y_hat, y, mu, log_var)
-        tot_loss = rec_loss + self.beta * KLD
+# Save sorted images
+save_sorted_images(train_gray, train_labels, "pathmnist/train2")
+save_sorted_images(test_gray, test_labels, "pathmnist/test2")
+
+# Create DeepTrack sources
+train_gray_source = dt.sources.ImageFolder(root="pathmnist/train2")
+test_gray_source = dt.sources.ImageFolder(root="pathmnist/test2")
+files = dt.sources.Join(train_gray_source, test_gray_source)
+
+#%% Show the images
+
+labels = PathMNIST_train_dataset.labels.squeeze()  # Ensure shape (N,)
+unique_labels = np.unique(labels)
+num_classes = len(unique_labels)
+
+# Create figure: 2 examples × (RGB + Grayscale) per class
+fig, axs = plt.subplots(
+    nrows=num_classes,  # One row per class
+    ncols=4,            # 4 columns: [RGB1, Gray1, RGB2, Gray2]
+    figsize=(20, num_classes * 3)
+)
+
+# For each class, plot 2 examples (RGB + Grayscale pairs)
+for row_idx, label in enumerate(unique_labels):
+    # Get first two indices for this label
+    indices = np.where(labels == label)[0][:2]  
+    
+    for col_offset, img_idx in enumerate(indices):
+        # RGB (left)
+        ax_rgb = axs[row_idx, 2 * col_offset]
+        ax_rgb.imshow(train_imgs[img_idx].numpy().astype('uint8'))
+        ax_rgb.set_title(f"Label {label}: RGB (Ex {col_offset+1})", fontsize=12)
+        ax_rgb.axis('off')
         
-        self.log_dict({
-            "train_rec_loss": rec_loss,
-            "train_KL": KLD,
-            "train_total_loss": tot_loss
-        }, on_step=True, on_epoch=True, prog_bar=True)
-        
-        return tot_loss
+        # Grayscale (right)
+        ax_gray = axs[row_idx, 2 * col_offset + 1]
+        ax_gray.imshow(train_gray[img_idx], cmap='Greys')
+        ax_gray.set_title(f"Label {label}: Grayscale (Ex {col_offset+1})", fontsize=12)
+        ax_gray.axis('off')
 
-#%% Create the VAE with latent dim 2
+plt.suptitle("RGB vs. Grayscale Comparison (2 Examples per Class)", y=1.02, fontsize=16)
+plt.tight_layout()
+plt.show()
+#%% Show the images 2
+original_rgb = train_imgs[:10]  # Shape: [10, 28, 28, 3]
 
-vae = VariationalAutoEncoderMLP(
-    input_size=(64, 64),
-    hidden_dim=256,
-    latent_dim=2,
-    reconstruction_loss=nn.L1Loss(),
-    beta=1
-).create()
+# Load FIRST 10 generated grayscale images from disk (enforce order)
+gray_paths = [f"pathmnist/train2/0_{i}.png" for i in range(10)]  # Assumes filenames are image_0.png, image_1.png, etc.
+generated_gray = [np.array(Image.open(path)) for path in gray_paths]
 
-# %%
-vae_trainer = dl.Trainer(max_epochs=20, accelerator="auto")
-vae_trainer.fit(vae, diverse_loader)
-# %% Plot the images
-for i in range(5):
-    input, target = diverse_pip.update().resolve()
+# Plot side-by-side
+fig, axs = plt.subplots(2, 10, figsize=(20, 4))
+for i in range(10):
+    # Original RGB (top row)
+    axs[0, i].imshow(original_rgb[i].numpy().astype('uint8'))
+    axs[0, i].set_title(f"Original {i}")
+    axs[0, i].axis('off')
     
-    predicted, mu, log_var = vae(input.unsqueeze(0))
-    predicted = predicted.detach()
-    
-    input_img = input[0, :, :] 
-    
-    target_img = target[0, :, :] 
-    
-    predicted_img = predicted[0, :, :] 
-    
-    plot_image(f"Input Image {i}", input_img)
-    plot_image(f"Target Image {i}", target_img)
-    plot_image(f"Predicted Image {i}", predicted_img)
-# %% b)
-if not os.path.exists("MNIST_dataset"):
-    os.system("git clone https://github.com/DeepTrackAI/MNIST_dataset")
+    # Generated grayscale (bottom row)
+    axs[1, i].imshow(generated_gray[i], cmap='gray')
+    axs[1, i].set_title(f"Generated {i}")
+    axs[1, i].axis('off')
 
-data_dir = os.path.join("MNIST_dataset", "mnist")
-train_files = dt.sources.ImageFolder(root=os.path.join(data_dir, "train"))
-test_files = dt.sources.ImageFolder(root=os.path.join(data_dir, "test"))
-files = dt.sources.Join(train_files, test_files)
-
-print(f"Number of train images: {len(train_files)}")
-print(f"Number of test images: {len(test_files)}")
-
+plt.suptitle("Original RGB vs. Generated Grayscale (First 10 Ordered Pairs)", y=1.05)
+plt.tight_layout()
+plt.show()
+# %% Create VAE and pipeline
 image_pip = (dt.LoadImage(files.path) >> dt.NormalizeMinMax()
              >> dt.MoveAxis(2, 0) >> dt.pytorch.ToTensor(dtype=torch.float))
 
-train_dataset = dt.pytorch.Dataset(image_pip & image_pip, inputs=train_files)
-train_loader = dl.DataLoader(train_dataset, batch_size=64, shuffle=True)
-
-#%% Create VAE with loss 
-vae = VariationalAutoEncoderMLP(
-    input_size=(28, 28),
-    hidden_dim=512,
-    latent_dim=10,
-    reconstruction_loss=nn.BCELoss(reduction="sum"),
-    beta=1
+vae = dl.VariationalAutoEncoder(
+    latent_dim=2, channels=[32,32],
+    reconstruction_loss=torch.nn.BCELoss(reduction="sum"), beta=1,
 ).create()
 
-# %%
+train_dataset = dt.pytorch.Dataset(image_pip & image_pip, inputs=train_gray_source)
+train_loader = dl.DataLoader(train_dataset, batch_size=64, shuffle=True)
+#%% Training
+#vae = vae.to(device)
 vae_trainer = dl.Trainer(max_epochs=10, accelerator="auto")
 vae_trainer.fit(vae, train_loader)
 
-#%%
+# %% Generate images
 img_num, img_size = 21, 28
 z0_grid = z1_grid = Normal(0, 1).icdf(torch.linspace(0.001, 0.999, img_num))
 
@@ -254,5 +154,25 @@ plt.xticks(np.arange(0.5 * img_size, (0.5 + img_num) * img_size, img_size),
 plt.ylabel("z1", fontsize=24)
 plt.yticks(np.arange(0.5 * img_size, (0.5 + img_num) * img_size, img_size),
            np.round(z1_grid.numpy(), 1))
+plt.show()
+#%% Latent space
+label_pip = dt.Value(files.label_name[0]) >> int
+test_dataset = dt.pytorch.Dataset(image_pip & label_pip, inputs=test_gray_source)
+test_loader = dl.DataLoader(test_dataset, batch_size=64, shuffle=False)
+mu_list, test_labels = [], []
+for image, label in test_loader:
+    mu, _ = vae.encode(image)
+    mu_list.append(mu)
+    test_labels.append(label)
+mu_array = torch.cat(mu_list, dim=0).detach().numpy()
+test_labels = torch.cat(test_labels, dim=0).numpy()
+plt.figure(figsize=(12, 10))
+plt.scatter(mu_array[:, 0], mu_array[:, 1], s=3, c=test_labels, cmap="tab10")
+plt.gca().add_patch(Rectangle((-3.1, -3.1), 6.2, 6.2, fc="none", ec="k", lw=1))
+plt.xlabel("mu_array[:, 0]", fontsize=24)
+plt.ylabel("mu_array[:, 1]", fontsize=24)
+plt.gca().invert_yaxis()
+plt.axis("equal")
+plt.colorbar()
 plt.show()
 # %%
