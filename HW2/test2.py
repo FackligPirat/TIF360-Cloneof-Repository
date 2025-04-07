@@ -55,7 +55,6 @@ def save_sorted_images(images, labels, folder_path):
 save_sorted_images(train_gray, train_labels, "pathmnist/train2")
 save_sorted_images(test_gray, test_labels, "pathmnist/test2")
 
-# Create DeepTrack sources
 train_gray_source = dt.sources.ImageFolder(root="pathmnist/train2")
 test_gray_source = dt.sources.ImageFolder(root="pathmnist/test2")
 files = dt.sources.Join(train_gray_source, test_gray_source)
@@ -120,19 +119,46 @@ plt.show()
 # %% Create VAE and pipeline
 image_pip = (dt.LoadImage(files.path) >> dt.NormalizeMinMax()
              >> dt.MoveAxis(2, 0) >> dt.pytorch.ToTensor(dtype=torch.float))
-
+label_pip = dt.Value(files.label_name[0]) >> int
 vae = dl.VariationalAutoEncoder(
-    latent_dim=2, channels=[32,32],
+    latent_dim=16, channels=[32,64],
     reconstruction_loss=torch.nn.BCELoss(reduction="sum"), beta=1,
 ).create()
 
 train_dataset = dt.pytorch.Dataset(image_pip & image_pip, inputs=train_gray_source)
-train_loader = dl.DataLoader(train_dataset, batch_size=64, shuffle=True)
+train_loader = dl.DataLoader(train_dataset, batch_size=128, shuffle=True)
 #%% Training
 #vae = vae.to(device)
 vae_trainer = dl.Trainer(max_epochs=10, accelerator="auto")
 vae_trainer.fit(vae, train_loader)
+#%% Reconstruct
+vae.eval()
+classes = ['0','1','2','3','4','5','6','7','8']
 
+fig, axs = plt.subplots(2, 10, figsize=((10, 2)))
+for i, test_file in enumerate(np.random.choice(test_gray_source, 10)):
+    image, label = (image_pip & label_pip)(test_gray_source)
+    axs[0, i].imshow(image.squeeze(), cmap="gray")
+    axs[0, i].set_title(f"{int(label)} {classes[int(label)]}", fontsize=9)
+    axs[0, i].set_axis_off()
+
+    reconstructed_image, _ = vae(image.unsqueeze(0))
+    axs[1, i].imshow(reconstructed_image.detach().squeeze(), cmap="gray")
+    axs[1, i].set_axis_off()
+plt.show()
+#%% Generate images test
+vae.eval()
+with torch.no_grad():
+    generated_images = vae.decode(torch.randn(30, vae.latent_dim)).detach().cpu()
+
+# Plotting
+fig, axs = plt.subplots(3, 10, figsize=(20, 6))
+for ax, img in zip(axs.ravel(), generated_images):
+    ax.imshow(img.squeeze(), cmap="gray")
+    ax.set_axis_off()
+plt.suptitle("Generated Images from VAE Latent Space", y=1.02)
+plt.tight_layout()
+plt.show()
 # %% Generate images
 img_num, img_size = 21, 28
 z0_grid = z1_grid = Normal(0, 1).icdf(torch.linspace(0.001, 0.999, img_num))

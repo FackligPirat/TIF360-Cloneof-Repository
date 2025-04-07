@@ -106,19 +106,20 @@ plt.show()
 # %% Create VAE and pipeline
 image_pip = (dt.LoadImage(files.path) >> dt.NormalizeMinMax()
              >> dt.MoveAxis(2, 0) >> dt.pytorch.ToTensor(dtype=torch.float))
-
 vae = dl.VariationalAutoEncoder(
-    latent_dim=2, channels=[32,32],
+    latent_dim=2, channels=[16,16],
     reconstruction_loss=torch.nn.BCELoss(reduction="sum"), beta=1,
 ).create()
 
 train_dataset = dt.pytorch.Dataset(image_pip & image_pip, inputs=train_gray_source)
-train_loader = dl.DataLoader(train_dataset, batch_size=64, shuffle=True)
+train_loader = dl.DataLoader(train_dataset, batch_size=128, shuffle=True)
 #%% Training
 #vae = vae.to(device)
-vae_trainer = dl.Trainer(max_epochs=2000, accelerator="auto")
+vae_trainer = dl.Trainer(max_epochs=10, accelerator="auto")
 vae_trainer.fit(vae, train_loader)
 #%%
+
+#%%Generate images
 
 # %% Generate images
 img_num, img_size = 21, 28
