@@ -116,7 +116,7 @@ train_dataset = dt.pytorch.Dataset(image_pip & image_pip, inputs=train_gray_sour
 train_loader = dl.DataLoader(train_dataset, batch_size=64, shuffle=True)
 #%% Training
 #vae = vae.to(device)
-vae_trainer = dl.Trainer(max_epochs=50, accelerator="auto")
+vae_trainer = dl.Trainer(max_epochs=2000, accelerator="auto")
 vae_trainer.fit(vae, train_loader)
 #%%
 
