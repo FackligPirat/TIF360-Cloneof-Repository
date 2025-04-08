@@ -131,7 +131,7 @@ decoder = dl.ConvolutionalDecoder2d(
     in_channels=channels[-1],
     hidden_channels=channels[::-1],
     out_channels=1,
-    out_activation=None  # 🔥 No sigmoid here
+    out_activation=None 
 )
 decoder.preprocess.configure(
     torch.nn.Unflatten,

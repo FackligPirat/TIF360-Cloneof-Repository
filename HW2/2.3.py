@@ -5,6 +5,7 @@ import torch
 import matplotlib.pyplot as plt
 import numpy as np
 import deeplay as dl
+import torch.nn as nn
 
 if not os.path.exists("FashionMNIST_dataset"):
     os.system("git clone https://github.com/DeepTrackAI/FashionMNIST_dataset")
@@ -24,7 +25,7 @@ image_pip = (dt.LoadImage(files.path) >> dt.NormalizeMinMax()
              >> dt.MoveAxis(2, 0) >> dt.pytorch.ToTensor(dtype=torch.float))
 label_pip = dt.Value(files.label_name[0]) >> int
 
-#%%
+#%% Plot
 fig, axs = plt.subplots(3, 10, figsize=((10, 4)))
 for ax, train_file in zip(axs.ravel(),
                           np.random.choice(train_files, axs.size)):
@@ -33,41 +34,44 @@ for ax, train_file in zip(axs.ravel(),
     ax.set_title(f"{int(label)} {classes[int(label)]}", fontsize=9)
     ax.set_axis_off()
 plt.show()
-#%% 
-latent_dim = 20
-encoder = dt.models.ConvolutionalEncoder2D(
-    input_shape=(1, 28, 28),
-    channels=[32, 64],
-    latent_dim=latent_dim,
-    flatten=True,
-    pool=True,
-)
+#%%
 
-decoder = dt.models.ConvolutionalDecoder2D(
-    output_shape=(1, 28, 28),
-    channels=[64, 32],
-    latent_dim=latent_dim,
-    unflatten=True,
-    upsample=True,
-    activation="relu",
-    final_activation="sigmoid", 
-)
-
-vae = dl.models.VariationalAutoEncoder(
-    encoder=encoder,
-    decoder=decoder,
-    latent_dim=latent_dim,
-    reconstruction_loss=torch.nn.L1Loss(reduction="mean")
-)
+vae = dl.VariationalAutoEncoder(
+    input_size=(28,28),
+    channels=[32, 64], latent_dim=20,
+    reconstruction_loss=torch.nn.BCELoss(reduction="mean"), beta = 1
+).create()
 
 print(vae)
+
+def deterministic_forward(self, x):
+    mu, log_var = self.encode(x)
+    z = mu  # Skip sampling step
+    y_hat = self.decode(z)
+    return y_hat, mu, log_var
+
+original_forward = vae.__class__.forward.__get__(vae, type(vae))
+
+vae.forward = deterministic_forward.__get__(vae, type(vae))
+
 train_dataset = dt.pytorch.Dataset(image_pip & image_pip, inputs=train_files)
 train_loader = dl.DataLoader(train_dataset, batch_size=128, shuffle=True)
 #%% Training
-wae_trainer = dl.Trainer(max_epochs=10)
-wae_trainer.fit(vae, train_loader)
+beta_schedule = [0.5, 1]  # KL annealing
+epochs_per_stage = 10
+
+for i, beta in enumerate(beta_schedule):
+    vae.beta = beta
+    if beta > 0.5:
+        vae.forward = original_forward
+    
+    print(f"\nEpoch stage {i}, beta={beta}")
+
+    trainer = dl.Trainer(max_epochs=epochs_per_stage, accelerator="auto")
+    trainer.fit(vae, train_loader)
 #%% Reconstruct
 vae.eval();
+vae.forward = deterministic_forward.__get__(vae, type(vae))
 
 fig, axs = plt.subplots(2, 10, figsize=((10, 2)))
 for i, test_file in enumerate(np.random.choice(test_files, 10)):
@@ -76,7 +80,7 @@ for i, test_file in enumerate(np.random.choice(test_files, 10)):
     axs[0, i].set_title(f"{int(label)} {classes[int(label)]}", fontsize=9)
     axs[0, i].set_axis_off()
 
-    reconstructed_image, _ = vae(image.unsqueeze(0))
+    reconstructed_image, _,_ = vae(image.unsqueeze(0))
     axs[1, i].imshow(reconstructed_image.detach().squeeze(), cmap="gray")
     axs[1, i].set_axis_off()
 plt.show()
