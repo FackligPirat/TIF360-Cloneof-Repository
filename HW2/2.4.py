@@ -81,16 +81,13 @@ class ArgmaxJI(MulticlassJaccardIndex):
         super().update(preds.argmax(dim=1), targets.argmax(dim=1))
 
 ji_metric = ArgmaxJI(num_classes=3)
-#%%
-class NoSkip(dl.DeeplayModule):
-    def forward(self, encoder_output, decoder_input):
-        return decoder_input
+#%% unet_no_skip
 
-unet = dl.UNet2d(
-    in_channels=1, channels=[16, 32, 64, 128], out_channels=3, skip=NoSkip()
-)
+unet_no_skip = dl.ConvolutionalEncoderDecoder2d(in_channels=1, encoder_channels=[16, 32, 64, 128], decoder_channels=[64,32,16],
+                                        out_channels=3)
+
 unet_reg_template = dl.Regressor(
-    model=unet, loss=torch.nn.CrossEntropyLoss(), metrics=[ji_metric],
+    model=unet_no_skip, loss=torch.nn.CrossEntropyLoss(), metrics=[ji_metric],
     optimizer=dl.Adam(),
 )
 unet_reg = unet_reg_template.create()
@@ -169,3 +166,4 @@ ji_metric.reset()
 ji_seg = ji_metric(pred_seg[0].unsqueeze(0), test_seg.unsqueeze(0))
 
 print(ji_seg)
+# %%
