@@ -80,25 +80,6 @@ for row_idx, label in enumerate(unique_labels):
 plt.suptitle("RGB vs. Grayscale Comparison (2 Examples per Class)", y=1.02, fontsize=16)
 plt.tight_layout()
 plt.show()
-#%% Show the images arranged
-original_rgb = train_imgs[:10] 
-
-gray_paths = [f"bloodmnist/train/{i}.png" for i in range(10)] 
-generated_gray = [np.array(Image.open(path)) for path in gray_paths]
-
-fig, axs = plt.subplots(2, 10, figsize=(20, 4))
-for i in range(10):
-    axs[0, i].imshow(original_rgb[i].numpy().astype('uint8'))
-    axs[0, i].set_title(f"Original {i}")
-    axs[0, i].axis('off')
-    
-    axs[1, i].imshow(generated_gray[i], cmap='gray')
-    axs[1, i].set_title(f"Generated {i}")
-    axs[1, i].axis('off')
-
-plt.suptitle("Original RGB vs. Generated Grayscale (First 10 Ordered Pairs)", y=1.05)
-plt.tight_layout()
-plt.show()
 # %% Create VAE and pipeline
 image_pip = (dt.LoadImage(files.path) >> dt.NormalizeMinMax()
              >> dt.MoveAxis(2, 0) >> dt.pytorch.ToTensor(dtype=torch.float))
