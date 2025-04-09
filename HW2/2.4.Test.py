@@ -31,7 +31,8 @@ sources = dt.sources.Join(train_srcs, val_srcs, test_srcs)
 
 print(f"Raw images: {len(raw_paths)}")
 print(f"Segmentation labels: {len(seg_paths)}")
-# %% define pipline and datasets
+
+#%% Define preprocessing pipeline and datasets
 def select_labels(class_labels):
     """Create a function to filter and remap labels in a segmentation map."""
     def inner(segmentation):
@@ -53,11 +54,12 @@ pip = ((im_pip & seg_pip) >> dt.FlipLR(sources.flip_lr)
 
 train_dataset = dt.pytorch.Dataset(pip, train_srcs)
 val_dataset = dt.pytorch.Dataset(pip, val_srcs)
-#%% Plot iput images and ground-truth
+test_dataset = dt.pytorch.Dataset(pip, test_srcs)
+
+#%% Visualization
 image, segmentation = train_dataset[0]
 
 fig, axs = plt.subplots(1, 4, figsize=(10, 5))
-
 axs[0].imshow(image.permute(1, 2, 0), cmap="gray")
 axs[0].set_title("Image", fontsize=16)
 axs[0].set_axis_off()
@@ -72,7 +74,8 @@ for i in range(segmentation.shape[0]):
 
 plt.tight_layout()
 plt.show()
-#%% Class for Jaccard Index with multiple classes and loaders and Unet
+
+#%% Metric definition
 class ArgmaxJI(MulticlassJaccardIndex):
     """Compute Jaccard Index for multi-class predictions after argmax."""
 
@@ -80,92 +83,121 @@ class ArgmaxJI(MulticlassJaccardIndex):
         """Update Jaccard Index using argmax of class predictions."""
         super().update(preds.argmax(dim=1), targets.argmax(dim=1))
 
-ji_metric = ArgmaxJI(num_classes=3)
-#%%
+#%% NoSkip module
 class NoSkip(dl.DeeplayModule):
     def forward(self, encoder_output, decoder_input):
         return decoder_input
 
-unet = dl.UNet2d(
-    in_channels=1, channels=[16, 32, 64, 128], out_channels=3, skip=NoSkip()
+ji_metric = ArgmaxJI(num_classes=3)
+
+#%% UNet definitions
+channels = [16, 32, 64, 128]
+
+# With skip connections
+unet_with_skip = dl.UNet2d(
+    in_channels=1, channels=channels, out_channels=3, skip=dl.Cat()
 )
-unet_reg_template = dl.Regressor(
-    model=unet, loss=torch.nn.CrossEntropyLoss(), metrics=[ji_metric],
+reg_with_skip = dl.Regressor(
+    model=unet_with_skip,
+    loss=torch.nn.CrossEntropyLoss(),
+    metrics=[ji_metric],
     optimizer=dl.Adam(),
+).create()
+
+# Without skip connections
+unet_no_skip = dl.UNet2d(
+    in_channels=1, channels=channels, out_channels=3, skip=NoSkip()
 )
-unet_reg = unet_reg_template.create()
+reg_no_skip = dl.Regressor(
+    model=unet_no_skip,
+    loss=torch.nn.CrossEntropyLoss(),
+    metrics=[ji_metric],
+    optimizer=dl.Adam(),
+).create()
 
-print(unet_reg)
-
+#%% DataLoaders
 train_loader = dl.DataLoader(train_dataset, batch_size=2, shuffle=True)
 val_loader = dl.DataLoader(val_dataset, batch_size=2)
-#%% Training
-logger = CSVLogger("logs", name="train_100_epochs")
-trainer = dl.Trainer(max_epochs=100, accelerator="auto", logger=logger)
-trainer.fit(unet_reg, train_loader, val_loader)
-#%% Plot overfitting
-metrics = pd.read_csv(os.path.join(logger.log_dir, "metrics.csv")).ffill()
 
-def plot_training_metrics(m):
-    """Plot training metrics by epoch."""
+#%% ADD training without early stopping
+#%% Train with skip connections
+early_stop = EarlyStopping(monitor="valArgmaxJI_epoch", mode="max", patience=5)
+logger_skip = CSVLogger("logs", name="with_skip")
+trainer_skip = dl.Trainer(max_epochs=100, logger=logger_skip, callbacks=[early_stop])
+trainer_skip.fit(reg_with_skip, train_loader, val_loader)
+
+#%% Train without skip connections
+ji_metric = ArgmaxJI(num_classes=3)  # reset metric instance
+reg_no_skip = dl.Regressor(
+    model=unet_no_skip,
+    loss=torch.nn.CrossEntropyLoss(),
+    metrics=[ji_metric],
+    optimizer=dl.Adam(),
+).create()
+
+logger_noskip = CSVLogger("logs", name="without_skip")
+trainer_noskip = dl.Trainer(max_epochs=100, logger=logger_noskip, callbacks=[early_stop])
+trainer_noskip.fit(reg_no_skip, train_loader, val_loader)
+
+#%% Plot training metrics for both
+def plot_training_metrics(metrics_skip, metrics_noskip):
     fig, axs = plt.subplots(2, figsize=(6, 4))
 
-    axs[0].plot(m["epoch"], m["train_loss_epoch"], label="Train Loss")
-    axs[0].plot(m["epoch"], m["val_loss_epoch"], label="Validation Loss")
-    axs[0].set_xlabel("Epoch")
+    axs[0].plot(metrics_skip["epoch"], metrics_skip["train_loss_epoch"], label="With Skip")
+    axs[0].plot(metrics_skip["epoch"], metrics_skip["val_loss_epoch"], label="Val With Skip")
+    axs[0].plot(metrics_noskip["epoch"], metrics_noskip["train_loss_epoch"], label="No Skip")
+    axs[0].plot(metrics_noskip["epoch"], metrics_noskip["val_loss_epoch"], label="Val No Skip")
     axs[0].set_ylabel("Loss")
     axs[0].legend()
 
-    axs[1].plot(m["epoch"], m["trainArgmaxJI_epoch"], label="Train JI")
-    axs[1].plot(m["epoch"], m["valArgmaxJI_epoch"], label="Validation JI")
-    axs[1].set_xlabel("Epoch")
-    axs[1].set_ylabel("Jaccard Index (JI)")
+    axs[1].plot(metrics_skip["epoch"], metrics_skip["trainArgmaxJI_epoch"], label="Train With Skip")
+    axs[1].plot(metrics_skip["epoch"], metrics_skip["valArgmaxJI_epoch"], label="Val With Skip")
+    axs[1].plot(metrics_noskip["epoch"], metrics_noskip["trainArgmaxJI_epoch"], label="Train No Skip")
+    axs[1].plot(metrics_noskip["epoch"], metrics_noskip["valArgmaxJI_epoch"], label="Val No Skip")
+    axs[1].set_ylabel("Jaccard Index")
     axs[1].legend()
 
+    axs[1].set_xlabel("Epoch")
     plt.tight_layout()
     plt.show()
-    
-plot_training_metrics(metrics)
-# %% Preventing overfitting
-early_stop_unet_reg = unet_reg_template.create()
 
-early_stop = EarlyStopping(monitor="valArgmaxJI_epoch", mode="max", patience=5)
-early_stop_logger = CSVLogger("logs", name="train_until_stagnation")
+metrics_skip = pd.read_csv(os.path.join(logger_skip.log_dir, "metrics.csv")).ffill()
+metrics_noskip = pd.read_csv(os.path.join(logger_noskip.log_dir, "metrics.csv")).ffill()
+plot_training_metrics(metrics_skip, metrics_noskip)
 
-early_stop_trainer = dl.Trainer(max_epochs=100, logger=early_stop_logger,
-                                callbacks=[early_stop])
-early_stop_trainer.fit(early_stop_unet_reg, train_loader, val_loader)
-
-#%% Plot new overfittings results
-metrics = (pd.read_csv(os.path.join(early_stop_logger.log_dir, "metrics.csv"))
-           .ffill())
-plot_training_metrics(metrics)
-#%% Estimate segmentation with the U-net
-test_dataset = dt.pytorch.Dataset(pip, test_srcs)
+#%% Test prediction
 test_loader = dl.DataLoader(test_dataset, batch_size=2, shuffle=False)
-trainer.test(early_stop_unet_reg, test_loader)
-pred_seg = torch.cat(trainer.predict(early_stop_unet_reg, test_loader), dim=0)
-#%% Plot and calc test Jaccard Index
+pred_skip = torch.cat(trainer_skip.predict(reg_with_skip, test_loader), dim=0)
+pred_noskip = torch.cat(trainer_noskip.predict(reg_no_skip, test_loader), dim=0)
+
+#%% Visual comparison
 test_image, test_seg = test_dataset[0]
 
-fig, axs = plt.subplots(1, 3, figsize=(12, 9))
-
+fig, axs = plt.subplots(1, 4, figsize=(16, 6))
 axs[0].imshow(test_image[0], cmap="gray")
-axs[0].set_title("Image", fontsize=24)
+axs[0].set_title("Image", fontsize=16)
 axs[0].set_axis_off()
 
 axs[1].imshow(test_seg.argmax(dim=0))
-axs[1].set_title("Ground Truth", fontsize=24)
+axs[1].set_title("Ground Truth", fontsize=16)
 axs[1].set_axis_off()
 
-axs[2].imshow(pred_seg[0].argmax(dim=0))
-axs[2].set_title("Prediction", fontsize=24)
+axs[2].imshow(pred_skip[0].argmax(dim=0))
+axs[2].set_title("Prediction (With Skip)", fontsize=16)
 axs[2].set_axis_off()
+
+axs[3].imshow(pred_noskip[0].argmax(dim=0))
+axs[3].set_title("Prediction (No Skip)", fontsize=16)
+axs[3].set_axis_off()
 
 plt.tight_layout()
 plt.show()
 
+#%% Test Jaccard Index
+ji_metric = ArgmaxJI(num_classes=3)
+ji_with_skip = ji_metric(pred_skip[0].unsqueeze(0), test_seg.unsqueeze(0)).item()
 ji_metric.reset()
-ji_seg = ji_metric(pred_seg[0].unsqueeze(0), test_seg.unsqueeze(0))
+ji_without_skip = ji_metric(pred_noskip[0].unsqueeze(0), test_seg.unsqueeze(0)).item()
 
-print(ji_seg)
+print(f"Test Jaccard Index (With Skip): {ji_with_skip:.4f}")
+print(f"Test Jaccard Index (No Skip): {ji_without_skip:.4f}")
