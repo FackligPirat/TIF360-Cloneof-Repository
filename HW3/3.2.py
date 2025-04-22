@@ -132,7 +132,7 @@ plt.ylim(image_np.shape[0], 0)
 plt.tight_layout()
 plt.show()
 # %% Evaluate performance
-alpha = 0.1
+alpha = 0.05
 beta = 1 - alpha
 cutoff = 0.01
 mode = "constant"
@@ -161,7 +161,7 @@ plt.tight_layout()
 plt.show()
 
 # %% F1
-distance_th = 50
+distance_th = 30
 TP, FP, FN = 0, 0, 0
 
 for _ in tqdm.tqdm(range(100)):

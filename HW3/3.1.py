@@ -124,7 +124,7 @@ def plot_position_comparison(positions, predictions, title = "Translation no bia
     plt.ylabel("Predicted Vertical Position", fontsize=20)
     plt.axis("equal")
 
-    plt.suptitle(title, fontsize = 24, y = 0.95)
+    plt.suptitle(title, fontsize = 24, y = 0.8)
     plt.show()
 
 plot_position_comparison(positions, predictions)
