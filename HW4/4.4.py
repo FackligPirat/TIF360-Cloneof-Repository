@@ -81,6 +81,7 @@ def plot_training(epochs, train_losses, val_losses, benchmark):
     plt.xlabel("Epoch")
     plt.xlim([0, epochs - 1])
     plt.ylabel("Loss")
+    plt.ylim(top = 0.7)
     plt.legend()
     plt.show()
 
