@@ -32,34 +32,8 @@ for i, ax in enumerate(axs.flatten()):
 plt.tight_layout()
 plt.show()
 
-class DotProductAttention(dl.DeeplayModule):
-    """Dot-product attention."""
 
-    def __init__(self):
-        """Initialize dot-product attention."""
-        super().__init__()
-
-    def forward(self, queries, keys, values):
-        """Calculate dot-product attention."""
-        attn_scores = (torch.matmul(queries, keys.transpose(-2, -1))
-                       / (keys.size(-1) ** 0.5))
-        attn_matrix = torch.nn.functional.softmax(attn_scores, dim=-1)
-        attn_output = torch.matmul(attn_matrix, values)
-        return attn_output, attn_matrix
-    
-def plot_attention(query_tokens, key_tokens, attn_matrix, title="Attention matrix"):
-    """Plot attention."""
-    fig, ax = plt.subplots()
-    cax = ax.matshow(attn_matrix, cmap="Greens")
-    fig.colorbar(cax)
-    ax.set_title(title, fontsize=14, pad=12)
-    ax.xaxis.set_major_locator(FixedLocator(range(len(key_tokens))))
-    ax.yaxis.set_major_locator(FixedLocator(range(len(query_tokens))))
-    ax.set_xticklabels(key_tokens, rotation=90)
-    ax.set_yticklabels(query_tokens)
-    plt.show()
-#%% Functions and data 
-
+# %%
 n_samples, n_features = data.shape[0], data.shape[1]
 past_seq = 2 * daily_samples
 lag = 72
@@ -109,63 +83,21 @@ def plot_training(epochs, train_losses, val_losses, benchmark):
     plt.ylabel("Loss")
     plt.legend()
     plt.show()
-
-#%% GRU 
-
-
-
-class GRUWithCrossAttentionWrapper(nn.Module):
-    def __init__(self, recurrent_model, input_dim, attn_dim, output_dim):
-        super().__init__()
-        self.recurrent_model = recurrent_model
-        self.attn = nn.MultiheadAttention(embed_dim=attn_dim, num_heads=1, batch_first=True)
-        self.project_input = nn.Linear(input_dim, attn_dim)
-        self.output_layer = nn.Linear(attn_dim, output_dim)
-
-    def forward(self, x):
-
-        input_proj = self.project_input(x)  # (batch, seq, attn_dim)
-
-        # Run through GRU
-        gru_out = self.recurrent_model(x)  # (batch, hidden) if return_sequence=False
-
-        # Use GRU final output as query: reshape to (batch, 1, hidden)
-        query = gru_out.unsqueeze(1)
-
-        # Apply cross-attention
-        attn_output, attn_weights = self.attn(query=query, key=input_proj, value=input_proj)
-
-        # Predict from attention output
-        out = self.output_layer(attn_output.squeeze(1))
-        return out, attn_weights
-
-
+#%% Training
+epochs = 100
 
 gru_dl = dl.RecurrentModel(
     in_features=n_features,
     hidden_features=[8, 8, 8],
-    out_features=None,  # Let us handle the output in wrapper
+    out_features=1,
     rnn_type="GRU",
     dropout=0.2,
 )
+gru_stacked = dl.Regressor(gru_dl, optimizer=dl.Adam(lr=0.001)).create()
 
-# Wrap with cross-attention
-wrapped_model = GRUWithCrossAttentionWrapper(
-    recurrent_model=gru_dl,
-    input_dim=n_features,
-    attn_dim=8,
-    output_dim=1,
-)
-
-epochs = 100
-
-gru_stacked = dl.Regressor(wrapped_model, optimizer=dl.Adam(lr=0.001)).create()
 trainer = dl.Trainer(max_epochs=epochs, accelerator="auto")
 trainer.fit(gru_stacked, train_loader, val_loader)
 
 train_losses = trainer.history.history["train_loss_epoch"]["value"]
 val_losses = trainer.history.history["val_loss_epoch"]["value"][1:]
 plot_training(epochs, train_losses, val_losses, benchmark)
-
-
-# %%
