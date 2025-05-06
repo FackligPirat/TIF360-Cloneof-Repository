@@ -83,7 +83,64 @@ def plot_training(epochs, train_losses, val_losses, benchmark):
     plt.ylabel("Loss")
     plt.legend()
     plt.show()
-#%% Training
+
+class DotProductAttention(dl.DeeplayModule):
+    """Dot-product attention."""
+
+    def __init__(self):
+        """Initialize dot-product attention."""
+        super().__init__()
+
+    def forward(self, queries, keys, values):
+        """Calculate dot-product attention."""
+        attn_scores = (torch.matmul(queries, keys.transpose(-2, -1))
+                       / (keys.size(-1) ** 0.5))
+        attn_matrix = torch.nn.functional.softmax(attn_scores, dim=-1)
+        attn_output = torch.matmul(attn_matrix, values)
+        return attn_output, attn_matrix
+    
+def plot_attention(query_tokens, key_tokens, attn_matrix, title="Attention matrix", tick_interval=12):
+    """Plot attention with cleaner tick spacing."""
+    fig, ax = plt.subplots(figsize=(10, 2))
+    cax = ax.matshow(attn_matrix, cmap="Greens", aspect="auto")
+    fig.colorbar(cax)
+    ax.set_title(title, fontsize=14, pad=12)
+
+    # Use fewer ticks to avoid clutter
+    xticks = list(range(0, len(key_tokens), tick_interval))
+    ax.set_xticks(xticks)
+    ax.set_xticklabels([key_tokens[i] for i in xticks], rotation=90)
+
+    ax.set_yticks(range(len(query_tokens)))
+    ax.set_yticklabels(query_tokens)
+    plt.tight_layout()
+    plt.show()
+
+class GRUWithCrossAttention(nn.Module):
+    def __init__(self, input_dim, hidden_dim, output_dim, num_layers=1, dropout=0.0):
+        super().__init__()
+        self.gru = nn.GRU(input_dim, hidden_dim, num_layers=num_layers,
+                          batch_first=True, dropout=dropout)
+        self.query_proj = nn.Linear(hidden_dim, input_dim)
+        self.attn = DotProductAttention()
+        self.fc = nn.Linear(hidden_dim + input_dim, output_dim)
+
+    def forward(self, x, return_attention=False):
+        # x: (batch, seq_len, input_dim)
+        gru_out, h_n = self.gru(x)
+        query = h_n[-1].unsqueeze(1)  # (batch, 1, hidden_dim)
+        query_mapped = self.query_proj(query)  # (batch, 1, input_dim)
+
+        # Apply dot-product attention: query vs input sequence
+        attn_output, attn_matrix = self.attn(query_mapped, x, x)  # shapes: (batch, 1, input_dim), (batch, 1, seq_len)
+
+        combined = torch.cat([query.squeeze(1), attn_output.squeeze(1)], dim=-1)
+        output = self.fc(combined)
+
+        if return_attention:
+            return output, attn_matrix
+        return output
+#%% Old GRU
 epochs = 100
 
 gru_dl = dl.RecurrentModel(
@@ -101,3 +158,74 @@ trainer.fit(gru_stacked, train_loader, val_loader)
 train_losses = trainer.history.history["train_loss_epoch"]["value"]
 val_losses = trainer.history.history["val_loss_epoch"]["value"][1:]
 plot_training(epochs, train_losses, val_losses, benchmark)
+#%% Attention GRU
+epochs = 100
+
+attn_model = GRUWithCrossAttention(input_dim=n_features, 
+                                   hidden_dim=8, 
+                                   output_dim=1, 
+                                   num_layers=3, 
+                                   dropout=0.2)
+attn_regressor = dl.Regressor(attn_model, optimizer=dl.Adam(lr=0.001)).create()
+
+trainer = dl.Trainer(max_epochs=epochs, accelerator="auto")
+trainer.fit(attn_regressor, train_loader, val_loader)
+
+train_losses = trainer.history.history["train_loss_epoch"]["value"]
+val_losses = trainer.history.history["val_loss_epoch"]["value"][1:]
+plot_training(epochs, train_losses, val_losses, benchmark)
+# %% Attention matrix with 12 tick interval
+model = attn_regressor.model
+model.eval()
+
+# How many sequences to visualize
+num_sequences_to_plot = 5
+
+# Load one batch from the validation set
+batch = next(iter(val_loader))
+inputs, _ = batch  # Shape: (batch_size, seq_len, n_features)
+
+for i in range(min(num_sequences_to_plot, inputs.shape[0])):
+    x_seq = inputs[i].unsqueeze(0)  # Shape: (1, seq_len, n_features)
+
+    with torch.no_grad():
+        _, attn_matrix = model(x_seq, return_attention=True)
+
+    # Extract attention matrix for sample i
+    attn = attn_matrix[0, 0].cpu().numpy()  # Shape: (seq_len,)
+    
+    # Token labels for timesteps
+    seq_len = attn.shape[0]
+    tokens = [f"t{j}" for j in range(seq_len)]
+
+    # Plot
+    plot_attention(["GRU Output"], tokens, attn[np.newaxis, :],
+                   title=f"Attention over Input Sequence (Sample {i + 1})", tick_interval=12)
+# %%
+model = attn_regressor.model
+model.eval()
+
+num_sequences_to_plot = 5
+crop_len = 30
+
+batch = next(iter(val_loader))
+inputs, _ = batch  # Shape: (batch_size, seq_len, n_features)
+
+for i in range(min(num_sequences_to_plot, inputs.shape[0])):
+    x_seq = inputs[i].unsqueeze(0)  # Shape: (1, seq_len, n_features)
+
+    with torch.no_grad():
+        _, attn_matrix = model(x_seq, return_attention=True)
+
+    # Extract and crop attention
+    attn = attn_matrix[0, 0, :crop_len].cpu().numpy()  # Shape: (crop_len,)
+    tokens = [f"t{j}" for j in range(crop_len)]
+
+    plot_attention(
+        ["GRU Output"],
+        tokens,
+        attn[np.newaxis, :],  # Reshape to (1, crop_len) for plotting
+        title=f"Attention on First {crop_len} Timesteps (Sample {i + 1})",
+        tick_interval=1  # Fewer ticks for better readability
+    )
+# %%
