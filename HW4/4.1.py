@@ -33,12 +33,11 @@ plt.tight_layout()
 plt.show()
 # %% Functions ex1
 
-def create_sequences(data, input_length=24, output_length=6):
-    X, y = [], []
-    for i in range(len(data) - input_length - output_length):
+def create_sequences(data, input_length=24):
+    X= []
+    for i in range(len(data) - input_length):
         X.append(data[i:(i + input_length)])
-        y.append(data[(i + input_length):(i + input_length + output_length)])
-    return np.array(X), np.array(y)
+    return np.array(X)
 
 def add_linear_encoding(X):
     seq_len = X.shape[1]
@@ -54,9 +53,11 @@ def add_periodic_encoding(X, d_model=16):
     even_dim = np.arange(0, d_model, 2)
     odd_dim = np.arange(1, d_model, 2)
 
+
     pe[:, even_dim] = np.sin(position * np.exp(-np.log(10000.0) * even_dim / d_model))
     pe[:, odd_dim] = np.cos(position * np.exp(-np.log(10000.0) * odd_dim / d_model))
 
+    #Tile for full batch (this is what takes time)
     pe = np.tile(pe, (batch_size, 1, 1))
     X = X.reshape(batch_size, seq_len, 1)
     return np.concatenate([X, pe], axis=-1)
@@ -89,8 +90,9 @@ def plot_attention(query_tokens, key_tokens, attn_matrix, title="Attention matri
     plt.show()
 # %% Run
 temperature = data[:, 1]
+input_size = 24
 
-X, y = create_sequences(temperature)
+X = create_sequences(temperature, input_length=input_size)
 
 encodings = {
     "No Encoding": X.reshape(X.shape[0], X.shape[1], 1),
@@ -111,3 +113,4 @@ for name, X_encoded in encodings.items():
 
     tokens = [f"t-{i}" for i in range(sample.shape[1])]
     plot_attention(tokens, tokens, attn_matrix[0].detach().numpy(), title=name)
+# %%

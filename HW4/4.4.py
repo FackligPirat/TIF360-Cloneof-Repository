@@ -101,7 +101,6 @@ class DotProductAttention(dl.DeeplayModule):
         return attn_output, attn_matrix
     
 def plot_attention(query_tokens, key_tokens, attn_matrix, title="Attention matrix", tick_interval=12):
-    """Plot attention with cleaner tick spacing."""
     fig, ax = plt.subplots(figsize=(10, 2))
     cax = ax.matshow(attn_matrix, cmap="Greens", aspect="auto")
     fig.colorbar(cax)
