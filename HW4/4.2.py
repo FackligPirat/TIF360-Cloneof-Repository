@@ -31,8 +31,7 @@ for i, ax in enumerate(axs.flatten()):
                    color="gray", linestyle="--", linewidth=0.5)
 plt.tight_layout()
 plt.show()
-# %% Functions ex1
-
+#%% Functions
 def create_sequences(data, input_length=24, output_length=6):
     X, y = [], []
     for i in range(len(data) - input_length - output_length):
@@ -40,27 +39,6 @@ def create_sequences(data, input_length=24, output_length=6):
         y.append(data[(i + input_length):(i + input_length + output_length)])
     return np.array(X), np.array(y)
 
-def add_linear_encoding(X):
-    seq_len = X.shape[1]
-    encoding = np.linspace(0, 1, seq_len)
-    encoding = np.tile(encoding, (X.shape[0], 1))
-    return np.stack([X, encoding], axis=-1)
-
-def add_periodic_encoding(X, d_model=16):
-    batch_size, seq_len = X.shape
-    pe = np.zeros((seq_len, d_model))
-    position = np.arange(seq_len).reshape(-1, 1)
-
-    even_dim = np.arange(0, d_model, 2)
-    odd_dim = np.arange(1, d_model, 2)
-
-    pe[:, even_dim] = np.sin(position * np.exp(-np.log(10000.0) * even_dim / d_model))
-    pe[:, odd_dim] = np.cos(position * np.exp(-np.log(10000.0) * odd_dim / d_model))
-
-    pe = np.tile(pe, (batch_size, 1, 1))
-    X = X.reshape(batch_size, seq_len, 1)
-    return np.concatenate([X, pe], axis=-1)
-    
 class DotProductAttention(dl.DeeplayModule):
     """Dot-product attention."""
 
@@ -87,27 +65,52 @@ def plot_attention(query_tokens, key_tokens, attn_matrix, title="Attention matri
     ax.set_xticklabels(key_tokens, rotation=90)
     ax.set_yticklabels(query_tokens)
     plt.show()
-# %% Run
+
+class Time2Vec(nn.Module):
+    def __init__(self, seq_len, d_model):
+        super().__init__()
+        self.seq_len = seq_len
+        self.d_model = d_model
+        
+        self.omega = nn.Parameter(torch.randn(d_model))
+        self.phase = nn.Parameter(torch.randn(d_model))
+
+    def forward(self, batch_size):
+        t = torch.arange(self.seq_len).float().unsqueeze(1)
+        omega = self.omega.unsqueeze(0)
+        phase = self.phase.unsqueeze(0) 
+
+        #
+        angles = t @ omega + phase
+        time2vec = torch.zeros_like(angles)
+        time2vec[:, 0] = angles[:, 0]
+        time2vec[:, 1:] = torch.sin(angles[:, 1:])
+
+        time2vec = time2vec.unsqueeze(0).repeat(batch_size, 1, 1)
+        return time2vec
+#%% Run
 temperature = data[:, 1]
 
 X, y = create_sequences(temperature)
 
-encodings = {
-    "No Encoding": X.reshape(X.shape[0], X.shape[1], 1),
-    "Linear Encoding": add_linear_encoding(X),
-    "Periodic Encoding d = 5": add_periodic_encoding(X, d_model=5),
-    "Periodic Encoding d = 16": add_periodic_encoding(X, d_model=16),
-    "Periodic Encoding d = 50": add_periodic_encoding(X, d_model=50),
-    "Periodic Encoding d = 100": add_periodic_encoding(X, d_model=100),
-}
+torch.manual_seed(12)
+np.random.seed(12)
+
+input_length = 24
+batch_size = X.shape[0]
+
+X_input = X[:, :input_length].reshape(batch_size, input_length, 1)
+
+time2vec = Time2Vec(seq_len=input_length, d_model=16)
+encoding = time2vec(batch_size)  
+
+X_t2v = torch.cat([torch.tensor(X_input, dtype=torch.float32), encoding], dim=-1)
 
 attention = DotProductAttention()
+sample = X_t2v[0:1] 
+queries = keys = values = sample
 
-for name, X_encoded in encodings.items():
-    sample = torch.tensor(X_encoded[0:1], dtype=torch.float32)  # shape: (1, seq_len, dim)
-    queries = keys = values = sample
+attn_output, attn_matrix = attention(queries, keys, values)
 
-    attn_output, attn_matrix = attention(queries, keys, values)
-
-    tokens = [f"t-{i}" for i in range(sample.shape[1])]
-    plot_attention(tokens, tokens, attn_matrix[0].detach().numpy(), title=name)
+tokens = [f"t-{i}" for i in range(sample.shape[1])]
+plot_attention(tokens, tokens, attn_matrix[0].detach().numpy(), title="Time2Vec Encoding")
