@@ -101,7 +101,6 @@ X = create_sequences(temperature, input_length= input_length)
 torch.manual_seed(12)
 np.random.seed(12)
 
-
 batch_size = X.shape[0]
 
 X_input = X[:, :input_length].reshape(batch_size, input_length, 1)
