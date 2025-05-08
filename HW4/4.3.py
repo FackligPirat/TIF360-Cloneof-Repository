@@ -292,7 +292,7 @@ with torch.no_grad():
         embeddings, batch_indices, return_attn=True
     )
 
-selected_indices = [0, 3, 5]
+selected_indices = [1, 2, 5]
 for selected_index in selected_indices:
     mask = batch_indices == selected_index
     masked_indices = mask.nonzero(as_tuple=True)[0]
